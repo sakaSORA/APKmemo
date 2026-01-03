@@ -374,7 +374,7 @@
 
     async function clearBg() { if(confirm("削除？")) { await DB.delete('backgrounds', `bg-t${currentTabIndex}`); await applyBgImage(); closeModal('bgModal'); } }
 
-    // --- APK向けバックアップ機能 (ファイル名: APKめも_月日.txt) ---
+    // --- APKバックアップ機能 (テキスト共有方式) ---
     async function exportData() {
         const all = { tabs: tabNames, contents: {} };
         for(let i=0; i<9; i++) {
@@ -385,28 +385,31 @@
         const now = new Date();
         const fileName = `APKめも_${now.getMonth() + 1}月${now.getDate()}日.txt`;
 
-        // 1. Web Share API (ファイル共有) を優先使用
-        if (navigator.canShare && navigator.canShare({ files: [new File([""], "t.txt", {type: "text/plain"})] })) {
+        // 確実性のためにまずクリップボードにコピー
+        await navigator.clipboard.writeText(jsonString);
+
+        // ファイル生成共有がブロックされる環境に対応するため、テキスト共有を使用
+        if (navigator.share) {
             try {
-                const file = new File([jsonString], fileName, { type: 'text/plain' });
                 await navigator.share({
-                    title: 'シンプル記憶2 バックアップ',
-                    files: [file]
+                    title: fileName,
+                    text: jsonString 
                 });
                 return;
-            } catch (err) { console.log('Share error:', err); }
+            } catch (err) {
+                console.log('Share error:', err);
+                // 失敗した場合はフォールバックへ
+            }
         }
 
-        // 2. フォールバック: 従来のダウンロード
+        // 共有が完全にブロックされる環境向けの最終手段
         const blob = new Blob([jsonString], { type: 'text/plain' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = fileName;
         a.click();
         
-        // クリップボードにもコピー
-        navigator.clipboard.writeText(jsonString);
-        alert(`${fileName} を保存しました（クリップボードにもコピー済）`);
+        alert("データの書き出しを試みました。\n共有が動かない場合でも、クリップボードにコピー済みですので、他のメモ帳などに貼り付けて保存してください。");
     }
 
     function triggerImport() { closeModal('dataModal'); document.getElementById('importPicker').click(); }
