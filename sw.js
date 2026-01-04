@@ -1,4 +1,4 @@
-const CACHE_NAME = 'simple-memo-apk-v1';
+const CACHE_NAME = 'simple-memo-apk-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

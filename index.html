@@ -127,6 +127,13 @@
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; }
         .modal-content { background: white; width: 90%; max-width: 340px; border-radius: 12px; padding: 25px; text-align: center; }
         .modal-btn { width: 100%; margin-bottom: 12px; padding: 14px; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; background: white; font-weight: bold; }
+        
+        /* 復元用テキストエリア */
+        #restoreTextarea {
+            width: 100%; height: 200px; margin: 15px 0;
+            padding: 10px; border: 2px solid #007bff; border-radius: 8px;
+            font-size: 12px; font-family: monospace;
+        }
     </style>
 </head>
 <body>
@@ -159,14 +166,22 @@
     <div class="modal-content">
         <h3>データ管理</h3>
         <button class="modal-btn" onclick="exportData()">バックアップ (共有)</button>
-        <button class="modal-btn" onclick="triggerImport()">ファイルから復元</button>
-        <button class="modal-btn" onclick="importFromClipboard()">貼り付けて復元</button>
+        <button class="modal-btn" onclick="showRestoreModal()">データを復元</button>
         <button class="modal-btn" style="background:#eee" onclick="closeModal('dataModal')">閉じる</button>
     </div>
 </div>
 
+<div id="restoreModal" class="modal">
+    <div class="modal-content">
+        <h3>データを復元</h3>
+        <p style="font-size:0.9rem; color:#666;">バックアップデータを貼り付けてください</p>
+        <textarea id="restoreTextarea" placeholder="ここに貼り付け..."></textarea>
+        <button class="modal-btn" style="background:#007bff; color:white;" onclick="restoreFromText()">復元する</button>
+        <button class="modal-btn" style="background:#eee" onclick="closeModal('restoreModal')">キャンセル</button>
+    </div>
+</div>
+
 <input type="file" id="bgPicker" accept="image/*" style="display:none">
-<input type="file" id="importPicker" accept=".txt,.json" style="display:none">
 
 <script>
     'use strict';
@@ -220,7 +235,6 @@
 
     function setupEvents() {
         document.getElementById('bgPicker').onchange = handleBgSelect;
-        document.getElementById('importPicker').onchange = handleFileImport;
         const input = document.getElementById('memoInput');
         input.oninput = function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 150) + 'px'; adjustLayout(); };
         const list = document.getElementById('memoList');
@@ -374,7 +388,7 @@
 
     async function clearBg() { if(confirm("削除？")) { await DB.delete('backgrounds', `bg-t${currentTabIndex}`); await applyBgImage(); closeModal('bgModal'); } }
 
-    // --- APKバックアップ機能 (テキスト共有方式) ---
+    // --- WebView対応バックアップ機能 ---
     async function exportData() {
         const all = { tabs: tabNames, contents: {} };
         for(let i=0; i<9; i++) {
@@ -383,66 +397,85 @@
         const jsonString = JSON.stringify(all);
 
         const now = new Date();
-        const fileName = `APKめも_${now.getMonth() + 1}月${now.getDate()}日.txt`;
+        const fileName = `めもバックアップ_${now.getMonth() + 1}月${now.getDate()}日.txt`;
 
-        // 確実性のためにまずクリップボードにコピー
-        await navigator.clipboard.writeText(jsonString);
+        // まずクリップボードにコピー（確実性のため）
+        try {
+            await navigator.clipboard.writeText(jsonString);
+        } catch(e) {
+            console.log('Clipboard failed:', e);
+        }
 
-        // ファイル生成共有がブロックされる環境に対応するため、テキスト共有を使用
+        // Web Share API でテキスト共有（WebViewでも動作しやすい）
         if (navigator.share) {
             try {
                 await navigator.share({
                     title: fileName,
                     text: jsonString 
                 });
+                closeModal('dataModal');
                 return;
             } catch (err) {
-                console.log('Share error:', err);
-                // 失敗した場合はフォールバックへ
+                if (err.name !== 'AbortError') {
+                    console.log('Share error:', err);
+                }
             }
         }
 
-        // 共有が完全にブロックされる環境向けの最終手段
-        const blob = new Blob([jsonString], { type: 'text/plain' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = fileName;
-        a.click();
+        // 共有が使えない場合はdata URL方式
+        try {
+            const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(jsonString);
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            alert("ダウンロードを開始しました");
+        } catch(e) {
+            // 最終手段: クリップボードのみ
+            alert("共有機能が制限されていますが、\nクリップボードにコピー済みです。\n\n他のアプリに貼り付けて保存してください。");
+        }
         
-        alert("データの書き出しを試みました。\n共有が動かない場合でも、クリップボードにコピー済みですので、他のメモ帳などに貼り付けて保存してください。");
+        closeModal('dataModal');
     }
 
-    function triggerImport() { closeModal('dataModal'); document.getElementById('importPicker').click(); }
+    function showRestoreModal() {
+        closeModal('dataModal');
+        document.getElementById('restoreTextarea').value = '';
+        openModal('restoreModal');
+    }
 
-    async function importFromClipboard() {
-        const text = prompt("バックアップデータをここに貼り付けてください:");
-        if (!text) return;
+    async function restoreFromText() {
+        const text = document.getElementById('restoreTextarea').value.trim();
+        if (!text) {
+            alert("データを貼り付けてください");
+            return;
+        }
+
         try {
             const d = JSON.parse(text);
-            await processImportData(d);
-        } catch(e) { alert("形式が正しくありません"); }
-    }
+            
+            if (!d.tabs || !d.contents) {
+                throw new Error("Invalid format");
+            }
 
-    function handleFileImport(e) {
-        const f = e.target.files[0]; if (!f) return;
-        const r = new FileReader();
-        r.onload = async (ev) => {
-            try {
-                const d = JSON.parse(ev.target.result);
-                await processImportData(d);
-            } catch(e) { alert("失敗"); }
-        };
-        r.readAsText(f);
-    }
+            if (!confirm("現在のデータを上書きして復元しますか？")) {
+                return;
+            }
 
-    async function processImportData(d) {
-        if (!confirm("データを復元（上書き）しますか？")) return;
-        try {
             await DB.set('settings', 'tabNames', d.tabs);
-            for(let i=0; i<9; i++) await DB.set('memos', `t${i}`, d.contents[`tab_${i}`] || []);
-            alert("復元完了しました。再起動します。");
+            for(let i=0; i<9; i++) {
+                await DB.set('memos', `t${i}`, d.contents[`tab_${i}`] || []);
+            }
+            
+            alert("復元完了！アプリを再起動します");
             location.reload();
-        } catch(e) { alert("エラーが発生しました。"); }
+            
+        } catch(e) {
+            alert("データ形式が正しくありません。\nバックアップファイルの内容を確認してください。");
+            console.error("Restore error:", e);
+        }
     }
 
     function filterMemos() {
